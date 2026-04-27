@@ -30,7 +30,7 @@ from causalml.inference.meta import (
     BaseTClassifier,
     BaseXClassifier,
 )
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBRegressor
 
 
 _XGB_PARAMS = dict(
@@ -39,7 +39,6 @@ _XGB_PARAMS = dict(
     learning_rate=0.05,
     subsample=0.8,
     colsample_bytree=0.8,
-    use_label_encoder=False,
     eval_metric="logloss",
     random_state=42,
     n_jobs=-1,
@@ -88,13 +87,18 @@ class TLearner:
         return np.asarray(preds, dtype=float)
 
 
+def _xgb_reg():
+    params = {k: v for k, v in _XGB_PARAMS.items() if k != "eval_metric"}
+    return XGBRegressor(**params, eval_metric="rmse")
+
+
 class XLearner:
     name = "X-Learner"
 
     def __init__(self):
         self._model = BaseXClassifier(
             outcome_learner=_xgb(),
-            effect_learner=_xgb(),
+            effect_learner=_xgb_reg(),
         )
 
     def fit(self, X: pd.DataFrame, y: pd.Series, w: pd.Series):

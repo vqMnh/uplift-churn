@@ -17,9 +17,49 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
-from causalml.metrics import get_qini, auuc_score
 
 FIGURES_DIR = pathlib.Path(__file__).parent.parent / "outputs" / "figures"
+
+
+# ---------------------------------------------------------------------------
+# Qini / AUUC helpers (no causalml dependency)
+# ---------------------------------------------------------------------------
+
+def _qini_curve(cate, y, w):
+    """
+    Compute the Qini curve for one model.
+
+    Returns (fractions, qini_gains) where fractions ∈ [0, 1] and
+    qini_gains[k] = treated_positives_in_top_k
+                    − control_positives_in_top_k × (treated_in_top_k / control_in_top_k).
+
+    Both arrays start at (0, 0).
+    """
+    cate = np.asarray(cate, dtype=float)
+    y    = np.asarray(y,    dtype=float)
+    w    = np.asarray(w,    dtype=float)
+
+    order     = np.argsort(-cate)
+    y_s, w_s  = y[order], w[order]
+
+    cum_tp = np.cumsum(w_s * y_s)           # treated positives
+    cum_cp = np.cumsum((1 - w_s) * y_s)     # control positives
+    cum_t  = np.cumsum(w_s)                 # treated count
+    cum_c  = np.cumsum(1 - w_s)             # control count
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        qini = np.where(cum_c > 0, cum_tp - cum_cp * cum_t / cum_c, 0.0)
+
+    n = len(cate)
+    fractions = np.concatenate([[0.0], np.arange(1, n + 1) / n])
+    qini      = np.concatenate([[0.0], qini])
+    return fractions, qini
+
+
+def _auuc(cate, y, w) -> float:
+    """Area under the Qini curve (trapezoid integration)."""
+    fracs, qini = _qini_curve(cate, y, w)
+    return float(np.trapezoid(qini, fracs))
 
 # Business constants
 CONTACT_COST = 5.0
@@ -52,26 +92,9 @@ def compute_qini_arrays(
     y_test: pd.Series,
     w_test: pd.Series,
 ) -> dict:
-    """
-    Return {model_name: (x_vals, y_vals)} for Plotly / interactive plotting.
-
-    x_vals — fractions of population targeted [0, 1]
-    y_vals — cumulative incremental Qini gains
-    """
-    result = {}
+    """Return {model_name: (x_vals, y_vals)} for Plotly / interactive plotting."""
     y, w = y_test.values, w_test.values
-    for name, cate in cate_preds.items():
-        df_input = pd.DataFrame({"y": y, "w": w, name: cate})
-        qini_df = get_qini(
-            df_input,
-            outcome_col="y",
-            treatment_col="w",
-            treatment_effect_col=name,
-        )
-        x_vals = np.linspace(0, 1, len(qini_df))
-        y_vals = qini_df[name].values
-        result[name] = (x_vals, y_vals)
-    return result
+    return {name: _qini_curve(cate, y, w) for name, cate in cate_preds.items()}
 
 
 def compute_qini_data(
@@ -79,18 +102,8 @@ def compute_qini_data(
     y_test: pd.Series,
     w_test: pd.Series,
 ) -> dict:
-    """Return {model_name: qini_df} for each model."""
-    results = {}
-    y, w = y_test.values, w_test.values
-    for name, cate in cate_preds.items():
-        df_qini = get_qini(
-            pd.DataFrame({"y": y, "w": w, name: cate}),
-            outcome_col="y",
-            treatment_col="w",
-            treatment_effect_col=name,
-        )
-        results[name] = df_qini
-    return results
+    """Return {model_name: (fractions, qini_gains)} for each model."""
+    return compute_qini_arrays(cate_preds, y_test, w_test)
 
 
 def plot_qini_curves(
@@ -107,23 +120,10 @@ def plot_qini_curves(
 
     colors = ["#2196F3", "#4CAF50", "#FF5722"]
     for (name, cate), color in zip(cate_preds.items(), colors):
-        df_input = pd.DataFrame({"y": y, "w": w, name: cate})
-        qini_df = get_qini(
-            df_input,
-            outcome_col="y",
-            treatment_col="w",
-            treatment_effect_col=name,
-        )
-        auuc = auuc_score(
-            df_input,
-            outcome_col="y",
-            treatment_col="w",
-            treatment_effect_col=name,
-        )
+        auuc = _auuc(cate, y, w)
         scores[name] = auuc
-
-        x_vals = np.linspace(0, 1, len(qini_df))
-        ax.plot(x_vals, qini_df[name].values, label=f"{name} (AUUC={auuc:.4f})", color=color, lw=2)
+        fracs, qini = _qini_curve(cate, y, w)
+        ax.plot(fracs, qini, label=f"{name} (AUUC={auuc:.4f})", color=color, lw=2)
 
     ax.plot([0, 1], [0, 0], "k--", label="Random baseline", lw=1.5)
     ax.set_xlabel("Proportion of population targeted")

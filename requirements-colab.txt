@@ -1,0 +1,9 @@
+# Packages Colab does not pre-install (or needs a specific minimum).
+# numpy, pandas, scikit-learn, scipy, matplotlib, seaborn, plotly,
+# ipykernel, ipywidgets, tqdm, and joblib are already present in Colab.
+xgboost>=2.0.0
+causalml>=0.15.0
+shap>=0.45.0
+mlflow>=2.13.0
+pytest>=8.0.0
+pytest-timeout>=2.3.0

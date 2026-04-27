@@ -17,7 +17,30 @@ import pytest
 
 from src.preprocess import build_features, split
 from src.models import SLearner, optimal_threshold, optimal_targeting_fraction
-from causalml.metrics import auuc_score
+
+
+def _compute_auuc(cate, y, w) -> float:
+    """
+    Normalized AUUC: mean Qini gain when customers are ranked by predicted CATE.
+
+    For a random model this is ≈ 0; a positive value means the model beats random.
+    Implemented manually so the test is not sensitive to causalml version changes.
+    """
+    cate = np.asarray(cate, dtype=float)
+    y = np.asarray(y, dtype=float)
+    w = np.asarray(w, dtype=float)
+
+    order = np.argsort(-cate)
+    y, w = y[order], w[order]
+
+    n_treated = w.sum()
+    n_control = (1 - w).sum()
+    if n_treated == 0 or n_control == 0:
+        return 0.0
+
+    cum_t = np.cumsum(w * y) / n_treated
+    cum_c = np.cumsum((1 - w) * y) / n_control
+    return float((cum_t - cum_c).mean())
 
 
 # ---------------------------------------------------------------------------
@@ -61,10 +84,10 @@ def _make_uplift_fixture(n: int = 1_000, seed: int = 0) -> tuple:
     """
     Synthetic dataset with a clear, detectable uplift signal.
 
-    Treatment genuinely reduces churn probability by ~15 pp on average,
-    and the effect is larger for customers with feature1 > 0 (heterogeneous).
-    With n=1000 rows this signal is strong enough for a fast S-Learner to
-    achieve a normalized AUUC above the 0.5 random baseline.
+    Outcome Y=1 means *retained* (positive event).  Treatment increases
+    retention probability by ~10-25 pp (heterogeneous on feature1).
+    BaseSClassifier.predict() returns P(Y=1|T=1) - P(Y=1|T=0), so CATE > 0
+    for customers who respond — ranking descending is correct for targeting.
     """
     rng = np.random.default_rng(seed)
     feature1 = rng.normal(size=n)
@@ -73,9 +96,9 @@ def _make_uplift_fixture(n: int = 1_000, seed: int = 0) -> tuple:
 
     # Treatment effect is heterogeneous: larger for feature1 > 0
     true_cate = 0.10 + 0.15 * (feature1 > 0).astype(float)
-    p_churn_control = 0.40 + 0.10 * (feature1 > 0).astype(float)
-    p_churn = p_churn_control - true_cate * treatment
-    outcome = rng.binomial(1, p_churn.clip(0.05, 0.95), n)
+    p_retain_control = 0.60 - 0.10 * (feature1 > 0).astype(float)
+    p_retain = p_retain_control + true_cate * treatment
+    outcome = rng.binomial(1, p_retain.clip(0.05, 0.95), n)
 
     X = pd.DataFrame({"feature1": feature1, "feature2": feature2})
     y = pd.Series(outcome, name="outcome")
@@ -130,10 +153,7 @@ class TestPreprocessing:
 class TestAUUC:
     """
     Train an S-Learner on a synthetic fixture with a clear uplift signal and
-    verify the normalized AUUC score exceeds the random baseline of 0.5.
-
-    CausalML's auuc_score() returns a value in [0, 1] when normalize=True
-    (default), where 0.5 corresponds to a random targeting policy.
+    verify the normalized AUUC score is positive (above the random baseline of 0).
     """
 
     @pytest.fixture(scope="class")
@@ -151,18 +171,9 @@ class TestAUUC:
 
     def test_best_model_auuc_above_random(self, trained_results):
         cate, y_te, w_te = trained_results
-        model_name = "S-Learner"
-        df_input = pd.DataFrame(
-            {"y": y_te.values, "w": w_te.values, model_name: cate}
-        )
-        score = auuc_score(
-            df_input,
-            outcome_col="y",
-            treatment_col="w",
-            treatment_effect_col=model_name,
-        )
-        assert score > 0.5, (
-            f"AUUC={score:.4f} is not above random baseline of 0.5. "
+        score = _compute_auuc(cate, y_te.values, w_te.values)
+        assert score > 0, (
+            f"AUUC={score:.4f} is not above the random baseline of 0. "
             "The model may not be learning the uplift signal."
         )
 

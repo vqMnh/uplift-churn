@@ -1,0 +1,14 @@
+artifact_uri: /Users/minh/Desktop/uplift-churn/mlruns/189482325693825154/64eed7b87e0d4c0eabf65379fe4b4eb0/artifacts
+end_time: 1777263773473
+entry_point_name: ''
+experiment_id: '189482325693825154'
+lifecycle_stage: active
+run_id: 64eed7b87e0d4c0eabf65379fe4b4eb0
+run_name: T-Learner
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1777263773466
+status: 3
+tags: []
+user_id: minh
